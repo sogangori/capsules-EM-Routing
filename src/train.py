@@ -5,12 +5,6 @@ import time
 from time import localtime, strftime
 import numpy as np
 import capsnet_em as net
-'''
-61/300 train:1.000  test:0.969
-training finish 1.0 0.968500003219
-
-55000 12/300 train:0.982  test:0.981
-'''
 
 def get_mnist():
     mnist = input_data.read_data_sets('/mnist')
