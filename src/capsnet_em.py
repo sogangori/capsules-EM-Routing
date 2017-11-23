@@ -1,7 +1,7 @@
 import tensorflow as tf
 import tensorflow.contrib.slim as slim
-from config import cfg
 import numpy as np
+from config import cfg
 
 def spread_loss(predict, y,margin):
     
@@ -48,9 +48,9 @@ def tile_recpetive_field(capsules_5d, kernel, stride):
 
     tile_weight = tf.constant(weight, dtype=tf.float32)
     output = tf.nn.depthwise_conv2d(capsules_4d, tile_weight, strides=[1, stride, stride, 1], padding='VALID')
-    print (stride,'tile_weight ',tile_weight.shape)#(3, 3, 544, 9)
-    print ('    tile input',capsules_4d)#(128, 12, 12, 544)
-    print ('    tile output0', output)#(128, 5, 5, 4896)
+    print (stride,'tile_weight ',tile_weight.shape)
+    print ('    tile input',capsules_4d)
+    print ('    tile output0', output)
     output_shape = output.get_shape()
     output = tf.reshape(output, shape=[int(output_shape[0]), int(output_shape[1]), int(output_shape[2]), int(input_shape[3]), kernel*kernel])
     print ('    tile output1', output)
@@ -62,13 +62,13 @@ def tile_recpetive_field(capsules_5d, kernel, stride):
     return activation,pose 
 
 # input should be a tensor with size as [batch_size, caps_num_i, 16]
-def mat_transform(pose, caps_num_i, caps_num_c):
+def mat_transform(pose, kernel, caps_num_i, caps_num_c):
     
-    output = tf.reshape(pose, shape=[cfg.batch_size,-1, 3*3,caps_num_i, 1, 4, 4])
+    output = tf.reshape(pose, shape=[cfg.batch_size,-1, kernel*kernel,caps_num_i, 1, 4, 4])
     b = int(output.get_shape()[0])
     wh = int(output.get_shape()[1])
     
-    w = slim.variable('w'+str(caps_num_c), shape=[1,1, 3*3, caps_num_i, caps_num_c, 4, 4], dtype=tf.float32)
+    w = slim.variable('w'+str(caps_num_c), shape=[1,1, kernel*kernel, caps_num_i, caps_num_c, 4, 4], dtype=tf.float32)
     print ('    mat_transform input0',pose)
     print ('    mat_transform input1',output)
     print ('    mat_transform  w',w)
@@ -78,13 +78,14 @@ def mat_transform(pose, caps_num_i, caps_num_c):
     print ('    mat_transform tile b',w)
     votes = tf.matmul(output, w)
     print ('    mat_transform tile a*b',votes)
-    votes = tf.reshape(votes, [b, wh, 3*3,caps_num_i, caps_num_c, 16])
+    votes = tf.reshape(votes, [b, wh, kernel*kernel,caps_num_i, caps_num_c, 16])
     print ('    mat_transform votes ',votes )
     return votes
 
 def get_conv_output_size(feature_map,kernel,stride):
     height = int( (int(feature_map.get_shape()[1])-int(kernel))/stride+1)
-    return height,height 
+    width = int( (int(feature_map.get_shape()[2])-int(kernel))/stride+1)
+    return height,width
     
 def build_arch(X):    
     # instead of initializing bias with constant 0, a truncated normal initializer is exploited here for higher stability
@@ -120,8 +121,8 @@ def build_arch(X):
             height,width = get_conv_output_size(capsules,kernel,stride) # 5
             print ('conv_caps1 height, width',height,width)
             activation, pose = tile_recpetive_field(capsules, kernel, stride)
-            votes = mat_transform(pose, cfg.B,cfg.C)                        
-            capsules,check = em_routing(votes, activation, kernel*kernel, cfg.B, cfg.C)
+            votes = mat_transform(pose,kernel,cfg.B,cfg.C)                        
+            capsules,check = em_routing(votes, activation, kernel, cfg.B, cfg.C)
             capsules = tf.reshape(capsules, [-1, height ,width, cfg.C,16+1])
             assert capsules.get_shape() == [cfg.batch_size, height, width, cfg.C,16+1]
 
@@ -131,8 +132,8 @@ def build_arch(X):
             height,width = get_conv_output_size(capsules,kernel,stride) # 3
             print ('conv_caps2 height, width',height,width)
             activation, pose = tile_recpetive_field(capsules, kernel, stride)
-            votes = mat_transform(pose, cfg.C, cfg.D)                     
-            capsules,check = em_routing(votes, activation, kernel*kernel, cfg.C, cfg.D)
+            votes = mat_transform(pose,kernel, cfg.C, cfg.D)                     
+            capsules,check = em_routing(votes, activation, kernel, cfg.C, cfg.D)
             capsules = tf.reshape(capsules, [-1, height ,width, cfg.D,16+1])
             assert capsules.get_shape() == [cfg.batch_size, height,width, cfg.D,16+1]
 
@@ -142,10 +143,10 @@ def build_arch(X):
             height,width = get_conv_output_size(capsules,kernel,stride) # 1
             print ('class_caps height, width',height,width)
             activation,pose = tile_recpetive_field(capsules, kernel, 1)                   
-            votes = mat_transform(pose, cfg.D, cfg.E)            
+            votes = mat_transform(pose,kernel, cfg.D, cfg.E)            
             print (' final votes',votes )            
             votes = add_scaled_coordinate(votes)             
-            capsules,check = em_routing(votes, activation, kernel*kernel, cfg.D,cfg.E)
+            capsules,check = em_routing(votes, activation, kernel, cfg.D,cfg.E)
             capsules = tf.reshape(capsules, [-1, height,width,cfg.E,16+1])
             assert capsules.get_shape() == [cfg.batch_size, height,width, cfg.E,16+1]
         
@@ -203,16 +204,16 @@ def e_step(activation,sigma,mean,votes):
     r = ap / ap_sum
     return r,norm
 
-def em_routing(votes, activation, kxk, caps_num_i,caps_num_c):
-    #(20, 1, 9, 32, 10, 16)
+def em_routing(votes, activation, kernel, caps_num_i,caps_num_c):
+        
     b = cfg.batch_size
     print ('routing votes in',caps_num_i,caps_num_c,votes)
-    votes = tf.reshape(votes, [b ,-1, kxk,caps_num_i,caps_num_c,16])    
-    activation = tf.reshape(activation, [b ,-1,kxk, caps_num_i,1,1])
+    votes = tf.reshape(votes, [b ,-1, kernel*kernel,caps_num_i,caps_num_c,16])    
+    activation = tf.reshape(activation, [b ,-1,kernel*kernel, caps_num_i,1,1])
     print ('routing votes',votes)
     print ('routing a',caps_num_c, activation)
         
-    r = tf.ones([b, 1, kxk, caps_num_i, caps_num_c,1], dtype=np.float32) / caps_num_c    
+    r = tf.ones([b, 1, kernel*kernel, caps_num_i, caps_num_c,1], dtype=np.float32) / caps_num_c    
     print ('routing r',caps_num_c, r)
     temperature_lambda = 0.33 # temp
     for i in range(cfg.iter_routing):
