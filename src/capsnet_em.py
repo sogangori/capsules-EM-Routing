@@ -19,22 +19,22 @@ def spread_loss(predict, y,margin):
 def cross_entropy_loss(predict, y):
     return tf.reduce_mean(tf.losses.sparse_softmax_cross_entropy(labels=y, logits=predict))
 
-
-def add_scaled_coordinate(vote):
-    vote = tf.reshape(vote, [-1,3,3,cfg.D,cfg.E,4*4])
+def add_scaled_coordinate(vote,height,width):
+    vote = tf.reshape(vote, [-1,height,width,cfg.D,cfg.E,4*4])
         
-    coordinate = tf.constant((np.arange(3)+0.5)/ 3, tf.float32) 
-    coordinate_y = tf.reshape(coordinate,[3,1,1])
-    coordinate_x = tf.reshape(coordinate,[1,3,1])
-    coord_y = tf.tile(coordinate_y,[1,3,1])
-    coord_x = tf.tile(coordinate_x,[3,1,1])    
-    coord_zero = tf.zeros([3,3,14])
+    coordinate_y = tf.constant((np.arange(height)+0.5)/ height, tf.float32)
+    coordinate_x = tf.constant((np.arange(width)+0.5)/ width, tf.float32)     
+    coordinate_y = tf.reshape(coordinate_y,[height,1,1])
+    coordinate_x = tf.reshape(coordinate_x,[1,width,1])
+    coord_y = tf.tile(coordinate_y,[1,width,1])
+    coord_x = tf.tile(coordinate_x,[height,1,1])    
+    coord_zero = tf.zeros([height,width,14])
     
     coord_xyz = tf.concat([coord_y,coord_x,coord_zero],-1)#(3, 3, 16)
-    coord_reshape = tf.reshape(coord_xyz, [1,3,3,1,1,4*4])
+    coord_reshape = tf.reshape(coord_xyz, [1,height,width,1,1,4*4])
     coord_vote = tf.tile(coord_reshape,   [1,1,1,cfg.D,cfg.E,1]) 
     vote_coord = vote + coord_vote
-    vote_coord = tf.reshape(vote_coord, [-1,1,3*3,cfg.D,cfg.E,4*4])
+    vote_coord = tf.reshape(vote_coord, [-1,1,height*width,cfg.D,cfg.E,4*4])
     return vote_coord 
 
 def tile_recpetive_field(capsules_5d, kernel, stride):
@@ -140,15 +140,15 @@ def build_arch(X):
         with tf.variable_scope('class_caps'):
             kernel = int(3)
             stride = int(1)
-            height,width = get_conv_output_size(capsules,kernel,stride) # 1
-            print ('class_caps height, width',height,width)
+            height_out,width_out = get_conv_output_size(capsules,kernel,stride) # 1
+            print ('class_caps height, width',height_out,width_out)
             activation,pose = tile_recpetive_field(capsules, kernel, 1)                   
             votes = mat_transform(pose,kernel, cfg.D, cfg.E)            
             print (' final votes',votes )            
-            votes = add_scaled_coordinate(votes)             
+            votes = add_scaled_coordinate(votes,height,width)             
             capsules,check = em_routing(votes, activation, kernel, cfg.D,cfg.E)
-            capsules = tf.reshape(capsules, [-1, height,width,cfg.E,16+1])
-            assert capsules.get_shape() == [cfg.batch_size, height,width, cfg.E,16+1]
+            capsules = tf.reshape(capsules, [-1, height_out,width_out,cfg.E,16+1])
+            assert capsules.get_shape() == [cfg.batch_size, height_out,width_out, cfg.E,16+1]
         
         final_activation = tf.reshape(capsules[:,:,:,:,0], shape=[-1, 10])
 
