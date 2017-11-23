@@ -218,12 +218,11 @@ def em_routing(votes, activation, kernel, caps_num_i,caps_num_c):
         
     r = tf.ones([b, 1, kernel*kernel, caps_num_i, caps_num_c,1], dtype=np.float32) / caps_num_c    
     print ('routing r',caps_num_c, r)
-    temperature_lambda = 1/cfg.iter_routing # temp
+    temperature_lambda = 0.1
     for i in range(cfg.iter_routing):
         print ('\n routing',i)    
         mean, sigma, activation = m_step(temperature_lambda, r,activation,votes,caps_num_c)
-        r,check = e_step(activation,sigma,mean,votes)
-        temperature_lambda+=1/cfg.iter_routing # temp              
+        r,check = e_step(activation,sigma,mean,votes)                      
     
     capsules = tf.concat([activation,mean], axis=-1)    
     return capsules, r
