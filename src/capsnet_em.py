@@ -23,9 +23,9 @@ def cross_entropy_loss(predict, y):
 def add_scaled_coordinate(vote):
     vote = tf.reshape(vote, [-1,3,3,cfg.D,cfg.E,4,4])
         
-    coordinate_y = tf.constant((np.arange(3)+0.5)/ 3, tf.float32) 
-    coordinate_y = tf.reshape(coordinate_y,[3,1,1])
-    coordinate_x = tf.reshape(coordinate_y,[1,3,1])
+    coordinate = tf.constant((np.arange(3)+0.5)/ 3, tf.float32) 
+    coordinate_y = tf.reshape(coordinate,[3,1,1])
+    coordinate_x = tf.reshape(coordinate,[1,3,1])
     coord_y = tf.tile(coordinate_y,[1,3,1])
     coord_x = tf.tile(coordinate_x,[3,1,1])    
     coord_zero = tf.zeros([3,3,14])
@@ -54,7 +54,9 @@ def tile_recpetive_field(capsules, kernel, stride):
     output = tf.transpose(output, perm=[0, 1, 2, 4, 3])
     print ('    tile output2', output)
     output = tf.reshape(output,[-1,17])
-    return output
+    activation = output[:, 0]
+    pose = output[:, 1:]
+    return activation,pose 
 
 # input should be a tensor with size as [batch_size, caps_num_i, 16]
 def mat_transform(pose, caps_num_i, caps_num_c):
@@ -102,28 +104,23 @@ def build_arch(X):
             assert capsules.get_shape() == [cfg.batch_size, 12, 12, cfg.B*17]
 
         with tf.variable_scope('conv_caps1'):
-            capsules_tile = tile_recpetive_field(capsules, 3, 2)                        
-            activation = capsules_tile[:, 0]            
-            votes = mat_transform(capsules_tile[:, 1:], cfg.B,cfg.C)                        
+            activation, pose = tile_recpetive_field(capsules, 3, 2)
+            votes = mat_transform(pose, cfg.B,cfg.C)                        
             mean, activation,check = em_routing(votes, activation, cfg.B, cfg.C)            
             capsules = concat_a_v(activation, mean)            
             capsules = tf.reshape(capsules, [cfg.batch_size, 5, 5, -1])
             assert capsules.get_shape() == [cfg.batch_size, 5,5, cfg.C*17]
 
         with tf.variable_scope('conv_caps2'):            
-            capsules_tile = tile_recpetive_field(capsules, 3, 1)            
-            activation = capsules_tile[:, 0]            
-            votes = mat_transform(capsules_tile[:, 1:], cfg.C, cfg.D)                     
+            activation, pose = tile_recpetive_field(capsules, 3, 1)
+            votes = mat_transform(pose, cfg.C, cfg.D)                     
             mean, activation,check = em_routing(votes, activation, cfg.C, cfg.D)
             capsules = concat_a_v(activation, mean)
             capsules = tf.reshape(capsules, [cfg.batch_size, 3, 3, -1])
             assert capsules.get_shape() == [cfg.batch_size, 3,3, cfg.D*17]
 
-        with tf.variable_scope('class_caps'):                     
-            
-            capsules_tile = tile_recpetive_field(capsules, 3, 1)                                 
-            activation = capsules_tile[:, 0]
-            pose = capsules_tile[:, 1:]                        
+        with tf.variable_scope('class_caps'):
+            activation,pose = tile_recpetive_field(capsules, 3, 1)                   
             votes = mat_transform(pose, cfg.D, cfg.E)            
             print (' final votes ',votes )#(10, 36, 10, 16)
             
