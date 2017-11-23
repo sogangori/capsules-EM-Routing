@@ -82,6 +82,10 @@ def mat_transform(pose, caps_num_i, caps_num_c):
     print ('    mat_transform votes ',votes )
     return votes
 
+def get_conv_output_size(feature_map,kernel,stride):
+    height = int( (int(feature_map.get_shape()[1])-int(kernel))/stride+1)
+    return height,height 
+    
 def build_arch(X):    
     # instead of initializing bias with constant 0, a truncated normal initializer is exploited here for higher stability
     b_init = tf.truncated_normal_initializer(mean=0.0, stddev=0.01) #tf.constant_initializer(0.0)
@@ -93,15 +97,16 @@ def build_arch(X):
         with tf.variable_scope('relu_conv1'):
             kernel = int(5)
             stride = int(2)
-            height = width = int( (int(X.get_shape()[1])-int(kernel/2)*2)/stride) # 12  
+            height,width = get_conv_output_size(X,kernel,stride) # 12  
             print ('relu_conv1 height, width',height,width)
             feature_map = slim.conv2d(X, num_outputs=cfg.A, kernel_size=[kernel, kernel], stride=stride)
+            print ('feature_map ',feature_map )
             assert feature_map.get_shape() == [cfg.batch_size, height, width, 32]
 
         with tf.variable_scope('primary_caps'):
             kernel = int(1)
             stride = int(1)
-            height = width = int( (int(feature_map.get_shape()[1])-int(kernel/2)*2)/stride) # 12
+            height,width = get_conv_output_size(feature_map,kernel,stride)# 12
             print ('primary_caps height, width',height,width)  
             pose = slim.conv2d(feature_map, num_outputs=cfg.B*16, kernel_size=[kernel, kernel])
             activation = slim.conv2d(feature_map, num_outputs=cfg.B, kernel_size=[1, 1],activation_fn=tf.nn.sigmoid)            
@@ -112,7 +117,7 @@ def build_arch(X):
         with tf.variable_scope('conv_caps1'):
             kernel = int(3)
             stride = int(2)
-            height = width = int( (int(capsules.get_shape()[1])-int(kernel/2)*2)/stride) # 5
+            height,width = get_conv_output_size(capsules,kernel,stride) # 5
             print ('conv_caps1 height, width',height,width)
             activation, pose = tile_recpetive_field(capsules, kernel, stride)
             votes = mat_transform(pose, cfg.B,cfg.C)                        
@@ -123,7 +128,7 @@ def build_arch(X):
         with tf.variable_scope('conv_caps2'):
             kernel = int(3)
             stride = int(1)
-            height = width = int( (int(capsules.get_shape()[1])-int(kernel/2)*2)/stride) # 3
+            height,width = get_conv_output_size(capsules,kernel,stride) # 3
             print ('conv_caps2 height, width',height,width)
             activation, pose = tile_recpetive_field(capsules, kernel, stride)
             votes = mat_transform(pose, cfg.C, cfg.D)                     
@@ -134,7 +139,7 @@ def build_arch(X):
         with tf.variable_scope('class_caps'):
             kernel = int(3)
             stride = int(1)
-            height = width = int((int(capsules.get_shape()[1])-int(kernel/2)*2)/stride) # 1
+            height,width = get_conv_output_size(capsules,kernel,stride) # 1
             print ('class_caps height, width',height,width)
             activation,pose = tile_recpetive_field(capsules, kernel, 1)                   
             votes = mat_transform(pose, cfg.D, cfg.E)            
