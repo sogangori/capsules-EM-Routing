@@ -62,8 +62,8 @@ def main(_):
             
             acc_sum_train+=acc/iteration_train
             now = strftime("%H:%M:%S", localtime())
-            if i%(cfg.epoch/10)==0:         
-                print('%d/%d %d/%d acc:%.3f, loss:%.5f margin:%.2f sec:%.2f check:%.3f' 
+            if i%int(iteration_train/2)==0:         
+                print('%d/%d %d/%d batch acc:%.3f, loss:%.5f margin:%.2f sec:%.2f check:%.3f' 
                       % (step,cfg.epoch,i,iteration_train, acc,loss_, margin,time.time()-tic,np.std(check_)))
 
             assert not np.isnan(loss_) 

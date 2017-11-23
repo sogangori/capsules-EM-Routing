@@ -21,7 +21,7 @@ def cross_entropy_loss(predict, y):
 
 
 def add_scaled_coordinate(vote):
-    vote = tf.reshape(vote, [-1,3,3,cfg.D,cfg.E,4,4])
+    vote = tf.reshape(vote, [-1,3,3,cfg.D,cfg.E,4*4])
         
     coordinate = tf.constant((np.arange(3)+0.5)/ 3, tf.float32) 
     coordinate_y = tf.reshape(coordinate,[3,1,1])
@@ -31,29 +31,32 @@ def add_scaled_coordinate(vote):
     coord_zero = tf.zeros([3,3,14])
     
     coord_xyz = tf.concat([coord_y,coord_x,coord_zero],-1)#(3, 3, 16)
-    coord_reshape = tf.reshape(coord_xyz, [1,3,3,1,1,4,4])
-    coord_vote = tf.tile(coord_reshape,   [1,1,1,cfg.D,cfg.E,1,1]) 
-    vote_coord = vote + coord_vote  
+    coord_reshape = tf.reshape(coord_xyz, [1,3,3,1,1,4*4])
+    coord_vote = tf.tile(coord_reshape,   [1,1,1,cfg.D,cfg.E,1]) 
+    vote_coord = vote + coord_vote
+    vote_coord = tf.reshape(vote_coord, [-1,1,3*3,cfg.D,cfg.E,4*4])
     return vote_coord 
 
-def tile_recpetive_field(capsules, kernel, stride):
-    input_shape = capsules.get_shape()   
+def tile_recpetive_field(capsules_5d, kernel, stride):
+    shape = capsules_5d.get_shape()   
+    capsules_4d = tf.reshape(capsules_5d, [int(shape[0]), int(shape[1]), int(shape[2]), int(shape[3])*int(shape[4])])
+    input_shape = capsules_4d.get_shape()
     weight = np.zeros(shape=[kernel, kernel, input_shape[3], kernel*kernel])
     for i in range(kernel):
         for j in range(kernel):
             weight[i, j, :, i * kernel + j] = 1
 
     tile_weight = tf.constant(weight, dtype=tf.float32)
-    output = tf.nn.depthwise_conv2d(capsules, tile_weight, strides=[1, stride, stride, 1], padding='VALID')
+    output = tf.nn.depthwise_conv2d(capsules_4d, tile_weight, strides=[1, stride, stride, 1], padding='VALID')
     print (stride,'tile_weight ',tile_weight.shape)#(3, 3, 544, 9)
-    print ('    tile input',capsules)#(128, 12, 12, 544)
+    print ('    tile input',capsules_4d)#(128, 12, 12, 544)
     print ('    tile output0', output)#(128, 5, 5, 4896)
     output_shape = output.get_shape()
     output = tf.reshape(output, shape=[int(output_shape[0]), int(output_shape[1]), int(output_shape[2]), int(input_shape[3]), kernel*kernel])
     print ('    tile output1', output)
     output = tf.transpose(output, perm=[0, 1, 2, 4, 3])
     print ('    tile output2', output)
-    output = tf.reshape(output,[-1,17])
+    output = tf.reshape(output,[-1,16+1])
     activation = output[:, 0]
     pose = output[:, 1:]
     return activation,pose 
@@ -61,73 +64,87 @@ def tile_recpetive_field(capsules, kernel, stride):
 # input should be a tensor with size as [batch_size, caps_num_i, 16]
 def mat_transform(pose, caps_num_i, caps_num_c):
     
-    output = tf.reshape(pose, shape=[-1, 3*3,caps_num_i, 1, 4, 4])
-    batch_size = int(output.get_shape()[0])
+    output = tf.reshape(pose, shape=[cfg.batch_size,-1, 3*3,caps_num_i, 1, 4, 4])
+    b = int(output.get_shape()[0])
+    wh = int(output.get_shape()[1])
     
-    w = slim.variable('w'+str(caps_num_c), shape=[1, 3*3, caps_num_i, caps_num_c, 4, 4], dtype=tf.float32)
+    w = slim.variable('w'+str(caps_num_c), shape=[1,1, 3*3, caps_num_i, caps_num_c, 4, 4], dtype=tf.float32)
     print ('    mat_transform input0',pose)
     print ('    mat_transform input1',output)
     print ('    mat_transform  w',w)
-    w = tf.tile(w, [batch_size, 1, 1, 1, 1, 1])
-    output = tf.tile(output, [1, 1, 1, caps_num_c, 1, 1])
+    w = tf.tile(w, [b,wh, 1, 1, 1, 1, 1])
+    output = tf.tile(output, [1, 1, 1, 1, caps_num_c, 1, 1])
     print ('    mat_transform tile a',output)
     print ('    mat_transform tile b',w)
     votes = tf.matmul(output, w)
     print ('    mat_transform tile a*b',votes)
-    votes = tf.reshape(votes, [batch_size, caps_num_i*3*3, caps_num_c, 16])
+    votes = tf.reshape(votes, [b, wh, 3*3,caps_num_i, caps_num_c, 16])
     print ('    mat_transform votes ',votes )
     return votes
-
-def concat_a_v(a,v):
-    a = tf.reshape(a, shape=[-1, 1])
-    v = tf.reshape(v, shape=[-1, 16])
-    av = tf.concat([a,v], axis=-1)
-    return av
 
 def build_arch(X):    
     # instead of initializing bias with constant 0, a truncated normal initializer is exploited here for higher stability
     b_init = tf.truncated_normal_initializer(mean=0.0, stddev=0.01) #tf.constant_initializer(0.0)
     w_init = tf.contrib.layers.xavier_initializer()
     # The paper didnot mention any regularization, a common l2 regularizer to weights is added here
-    w_reg = tf.contrib.layers.l2_regularizer(1e-8)
+    w_reg = tf.contrib.layers.l2_regularizer(1e-5)
 
     with slim.arg_scope([slim.conv2d], padding='VALID', weights_initializer=w_init,biases_initializer=b_init, weights_regularizer=w_reg):
-        with tf.variable_scope('relu_conv1'):            
-            feature_map = slim.conv2d(X, num_outputs=cfg.A, kernel_size=[5, 5], stride=2)
-            assert feature_map.get_shape() == [cfg.batch_size, 12, 12, 32]
+        with tf.variable_scope('relu_conv1'):
+            kernel = int(5)
+            stride = int(2)
+            height = width = int( (int(X.get_shape()[1])-int(kernel/2)*2)/stride) # 12  
+            print ('relu_conv1 height, width',height,width)
+            feature_map = slim.conv2d(X, num_outputs=cfg.A, kernel_size=[kernel, kernel], stride=stride)
+            assert feature_map.get_shape() == [cfg.batch_size, height, width, 32]
 
         with tf.variable_scope('primary_caps'):
-            pose = slim.conv2d(feature_map, num_outputs=cfg.B*16, kernel_size=[1, 1])
+            kernel = int(1)
+            stride = int(1)
+            height = width = int( (int(feature_map.get_shape()[1])-int(kernel/2)*2)/stride) # 12
+            print ('primary_caps height, width',height,width)  
+            pose = slim.conv2d(feature_map, num_outputs=cfg.B*16, kernel_size=[kernel, kernel])
             activation = slim.conv2d(feature_map, num_outputs=cfg.B, kernel_size=[1, 1],activation_fn=tf.nn.sigmoid)            
-            capsules = concat_a_v(activation, pose)            
-            capsules = tf.reshape(capsules, shape=[cfg.batch_size, 12, 12, -1])
-            assert capsules.get_shape() == [cfg.batch_size, 12, 12, cfg.B*17]
+            capsules_4d = tf.concat([activation, pose],-1)
+            capsules = tf.reshape(capsules_4d, [-1,height, width,cfg.B,16+1]) 
+            assert capsules.get_shape() == [cfg.batch_size, height, width, cfg.B,16+1]
 
         with tf.variable_scope('conv_caps1'):
-            activation, pose = tile_recpetive_field(capsules, 3, 2)
+            kernel = int(3)
+            stride = int(2)
+            height = width = int( (int(capsules.get_shape()[1])-int(kernel/2)*2)/stride) # 5
+            print ('conv_caps1 height, width',height,width)
+            activation, pose = tile_recpetive_field(capsules, kernel, stride)
             votes = mat_transform(pose, cfg.B,cfg.C)                        
-            mean, activation,check = em_routing(votes, activation, cfg.B, cfg.C)            
-            capsules = concat_a_v(activation, mean)            
-            capsules = tf.reshape(capsules, [cfg.batch_size, 5, 5, -1])
-            assert capsules.get_shape() == [cfg.batch_size, 5,5, cfg.C*17]
+            capsules,check = em_routing(votes, activation, kernel*kernel, cfg.B, cfg.C)
+            capsules = tf.reshape(capsules, [-1, height ,width, cfg.C,16+1])
+            assert capsules.get_shape() == [cfg.batch_size, height, width, cfg.C,16+1]
 
-        with tf.variable_scope('conv_caps2'):            
-            activation, pose = tile_recpetive_field(capsules, 3, 1)
+        with tf.variable_scope('conv_caps2'):
+            kernel = int(3)
+            stride = int(1)
+            height = width = int( (int(capsules.get_shape()[1])-int(kernel/2)*2)/stride) # 3
+            print ('conv_caps2 height, width',height,width)
+            activation, pose = tile_recpetive_field(capsules, kernel, stride)
             votes = mat_transform(pose, cfg.C, cfg.D)                     
-            mean, activation,check = em_routing(votes, activation, cfg.C, cfg.D)
-            capsules = concat_a_v(activation, mean)
-            capsules = tf.reshape(capsules, [cfg.batch_size, 3, 3, -1])
-            assert capsules.get_shape() == [cfg.batch_size, 3,3, cfg.D*17]
+            capsules,check = em_routing(votes, activation, kernel*kernel, cfg.C, cfg.D)
+            capsules = tf.reshape(capsules, [-1, height ,width, cfg.D,16+1])
+            assert capsules.get_shape() == [cfg.batch_size, height,width, cfg.D,16+1]
 
         with tf.variable_scope('class_caps'):
-            activation,pose = tile_recpetive_field(capsules, 3, 1)                   
+            kernel = int(3)
+            stride = int(1)
+            height = width = int((int(capsules.get_shape()[1])-int(kernel/2)*2)/stride) # 1
+            print ('class_caps height, width',height,width)
+            activation,pose = tile_recpetive_field(capsules, kernel, 1)                   
             votes = mat_transform(pose, cfg.D, cfg.E)            
-            print (' final votes ',votes )#(10, 36, 10, 16)
-            
-            votes = add_scaled_coordinate(votes) 
-            mean, activation,check = em_routing(votes, activation, cfg.D,cfg.E)
+            print (' final votes',votes )            
+            votes = add_scaled_coordinate(votes)             
+            capsules,check = em_routing(votes, activation, kernel*kernel, cfg.D,cfg.E)
+            capsules = tf.reshape(capsules, [-1, height,width,cfg.E,16+1])
+            assert capsules.get_shape() == [cfg.batch_size, height,width, cfg.E,16+1]
         
-        final_activation = tf.reshape(activation, shape=[cfg.batch_size, 10])
+        final_activation = tf.reshape(capsules[:,:,:,:,0], shape=[-1, 10])
 
     return final_activation, check
 
@@ -181,16 +198,16 @@ def e_step(activation,sigma,mean,votes):
     r = ap / ap_sum
     return r,norm
 
-def em_routing(votes, activation, caps_num_i,caps_num_c):
-    
+def em_routing(votes, activation, kxk, caps_num_i,caps_num_c):
+    #(20, 1, 9, 32, 10, 16)
     b = cfg.batch_size
     print ('routing votes in',caps_num_i,caps_num_c,votes)
-    votes = tf.reshape(votes, [b ,-1, 9,caps_num_i,caps_num_c,16])    
-    activation = tf.reshape(activation, [b ,-1,9, caps_num_i,1,1])
+    votes = tf.reshape(votes, [b ,-1, kxk,caps_num_i,caps_num_c,16])    
+    activation = tf.reshape(activation, [b ,-1,kxk, caps_num_i,1,1])
     print ('routing votes',votes)
     print ('routing a',caps_num_c, activation)
         
-    r = tf.ones([b, 1,9,caps_num_i, caps_num_c,1], dtype=np.float32) / caps_num_c    
+    r = tf.ones([b, 1, kxk, caps_num_i, caps_num_c,1], dtype=np.float32) / caps_num_c    
     print ('routing r',caps_num_c, r)
     temperature_lambda = 0.33 # temp
     for i in range(cfg.iter_routing):
@@ -198,6 +215,7 @@ def em_routing(votes, activation, caps_num_i,caps_num_c):
         mean, sigma, activation = m_step(temperature_lambda, r,activation,votes,caps_num_c)
         r,check = e_step(activation,sigma,mean,votes)
         temperature_lambda+=0.33 # temp              
-     
-    return mean, activation, r
+    
+    capsules = tf.concat([activation,mean], axis=-1)    
+    return capsules, r
 

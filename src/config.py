@@ -6,9 +6,9 @@ flags = tf.app.flags
 flags.DEFINE_float('clip_min', 1e-8, 'epsilon')
 flags.DEFINE_float('clip_max', 1000, 'clip_max')
 
-flags.DEFINE_integer('max_count', 100, 'max data m')
+flags.DEFINE_integer('max_count', 40, 'max data m')
 flags.DEFINE_integer('epoch', 100, 'epoch')
-flags.DEFINE_integer('batch_size', 10, 'batch size')
+flags.DEFINE_integer('batch_size', 20, 'batch size')
 flags.DEFINE_integer('iter_routing', 3, 'number of iterations')
 
 #    structure parameters
